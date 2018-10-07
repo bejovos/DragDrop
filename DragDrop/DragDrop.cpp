@@ -1,32 +1,84 @@
-#include <windows.h>
-#include <shlobj.h>
-#include <shellapi.h>
-#include <utility>
+#include <Windows.h>
+#include <tlhelp32.h>
+
 #include <algorithm>
-#include <string>
 #include <fstream>
+#include <iostream>
 #include <map>
+#include <string>
+#include <utility>
 #include <vector>
+#include <memory>
 
 #undef max
 
-std::wstring application_path;
-std::wstring file_name;
-
-
-std::wstring ToLower(std::wstring i_string)
+struct RawString
   {
-  for (wchar_t & c : i_string)
-    c = tolower(c);
-  return i_string;
-  }
+    RawString()
+      {
+      mp_buffer = std::make_unique<wchar_t[]>(1);
+      mp_buffer.get()[0] = '\0';
+      m_capacity = 0;
+      }
+    RawString(const RawString& i_other) = delete;
+    RawString(RawString&& i_other) noexcept = delete;
+    auto operator=(const RawString& i_other) -> RawString& = delete;
+    auto operator=(RawString&& i_other) noexcept -> RawString& = delete;
 
+    wchar_t* data(){ return mp_buffer.get(); }
+    size_t capacity()
+      {
+      return m_capacity; 
+      }
+    void reserve(const size_t i_size)
+      {
+      if (m_capacity >= i_size)
+        return;
+      auto new_buffer = std::make_unique<wchar_t[]>(i_size + 1);
+      wcscpy(new_buffer.get(), mp_buffer.get());
+      m_capacity = i_size;
+      mp_buffer = std::move(new_buffer);
+      }
+
+    void to_lower()
+      {
+      wchar_t* ptr = mp_buffer.get();
+      for (; *ptr != '\0'; ++ptr)
+        {
+        *ptr = tolower(*ptr);
+        }
+      }
+
+    RawString& operator=(const wchar_t* i_string)
+      {
+      size_t length = wcslen(i_string);
+      reserve(length);
+      wcscpy(mp_buffer.get(), i_string);
+      return *this;
+      }
+
+    friend auto operator==(const RawString& i_lhs, const RawString& i_rhs) -> bool
+      {
+      return wcscmp(i_lhs.mp_buffer.get(), i_rhs.mp_buffer.get()) == 0;
+      }
+
+    friend auto operator==(const RawString& i_lhs, const wchar_t* i_rhs) -> bool
+      {
+      return wcscmp(i_lhs.mp_buffer.get(), i_rhs) == 0;
+      }
+
+    size_t m_capacity;
+    std::unique_ptr<wchar_t[]> mp_buffer;
+  };
+
+RawString application_path;
+RawString file_name;
+RawString buffer, buffer2;
 std::pair<double, HWND> best_window(std::numeric_limits<double>::lowest(), nullptr);
-std::vector<wchar_t> buffer, buffer2;
 
 std::wstring RemoveSubstring(std::wstring i_string, const std::wstring & i_substring)
   {
-  auto pos = i_string.find(i_substring.c_str());
+  const auto pos = i_string.find(i_substring.c_str());
   if (pos != std::wstring::npos)
     i_string.erase(pos, i_substring.size());
   return i_string;
@@ -34,66 +86,58 @@ std::wstring RemoveSubstring(std::wstring i_string, const std::wstring & i_subst
 
 //////////////////////////////////////////////////////////////////////////
 
-bool IsMainWindow(HWND handle)
+bool IsMainWindow(const HWND i_handle)
   {
-  return GetWindow(handle, GW_OWNER) == (HWND)nullptr && IsWindowVisible(handle);
+  return GetWindow(i_handle, GW_OWNER) == nullptr && IsWindowVisible(i_handle);
   }
 
-void CopyNameToBuffer(HANDLE hProcess)
+void CopyNameToBuffer(const HANDLE i_h_process)
   {
-  DWORD value = static_cast<unsigned long>(buffer.size());
-  QueryFullProcessImageName(hProcess, 0, buffer.data(), &value);
-  if (value >= buffer.size() - 1)
+  DWORD value = static_cast<unsigned long>(buffer.capacity());
+  QueryFullProcessImageName(i_h_process, 0, buffer.data(), &value);
+  if (value == buffer.capacity())
     {
-    buffer.resize(buffer.size() * 2);
-    CopyNameToBuffer(hProcess);
+    buffer.reserve(value * 2 + 1);
+    CopyNameToBuffer(i_h_process);
     }
   }
 
-bool CompareApplicationPath(HWND hwnd, const std::wstring & i_application_path)
+bool CompareApplicationPath(const HWND i_hwnd)
   {
-  if (IsMainWindow(hwnd) == false)
+  if (IsMainWindow(i_hwnd) == false)
     return false;
 
   DWORD process_id;
-  GetWindowThreadProcessId(hwnd, &process_id);
+  GetWindowThreadProcessId(i_hwnd, &process_id);
 
   static std::map<DWORD, HWND> process_to_main_window;
 
   if (process_to_main_window.find(process_id) != process_to_main_window.end())
     return false;
 
-  process_to_main_window[process_id] = hwnd;
+  process_to_main_window[process_id] = i_hwnd;
 
-  HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, process_id);
-  if (hProcess == nullptr)
+  const HANDLE h_process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, process_id);
+  if (h_process == nullptr)
     return false;
 
-  CopyNameToBuffer(hProcess);
-  size_t length = GetLongPathName(buffer.data(), buffer2.data(), static_cast<DWORD>(buffer2.size()));
-  if (length > buffer2.size())
+  CopyNameToBuffer(h_process);
+  const size_t length = GetLongPathName(buffer.data(), buffer2.data(), static_cast<DWORD>(buffer2.capacity()));
+  if (length > buffer2.capacity())
     {
-    buffer2.resize(length);
-    GetLongPathName(buffer.data(), buffer2.data(), static_cast<DWORD>(buffer2.size()));
+    buffer2.reserve(length);  
+    GetLongPathName(buffer.data(), buffer2.data(), static_cast<DWORD>(buffer2.capacity()));
     }
 
-  CloseHandle(hProcess);
+  CloseHandle(h_process);
+  buffer2.to_lower();
 
-  return ToLower(buffer2.data()) == i_application_path;
+  return buffer2 == application_path;
   }
 
 //////////////////////////////////////////////////////////////////////////
 
-BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM /*lParam*/)
-  {  
-  if (CompareApplicationPath(hwnd, application_path) == true)
-    best_window = std::make_pair(0., hwnd);
-  return true;
-  }
-
-//////////////////////////////////////////////////////////////////////////
-
-double GetScore_VisualStudio(HWND i_hwnd, const std::wstring & i_file_name)
+double GetWindowScore(const HWND i_hwnd)
   {
   int index = 0;
   for (HWND hwnd = GetTopWindow(nullptr); hwnd != i_hwnd; hwnd = GetNextWindow(hwnd, GW_HWNDNEXT))
@@ -102,97 +146,148 @@ double GetScore_VisualStudio(HWND i_hwnd, const std::wstring & i_file_name)
   return index;
   }
 
-BOOL CALLBACK EnumWindowsProc_VisualStudio(HWND hwnd, LPARAM /*lParam*/)
-  {
-  if (CompareApplicationPath(hwnd, application_path) == true)
-    best_window = std::max(best_window, std::make_pair(GetScore_VisualStudio(hwnd, file_name), hwnd));
-
+BOOL CALLBACK EnumWindowsProc(HWND i_hwnd, LPARAM /*lParam*/)
+  {  
+  if (CompareApplicationPath(i_hwnd) == true)
+    best_window = std::max(best_window, std::make_pair(GetWindowScore(i_hwnd), i_hwnd));
   return true;
   }
 
 //////////////////////////////////////////////////////////////////////////
 
-void Show(HWND hwnd)
+void Show(const HWND i_hwnd)
   {
   WINDOWPLACEMENT place;
   memset(&place, 0, sizeof(WINDOWPLACEMENT));
   place.length = sizeof(WINDOWPLACEMENT);
-  GetWindowPlacement(hwnd, &place);
+  GetWindowPlacement(i_hwnd, &place);
   switch (place.showCmd)
     {
     case SW_SHOWMAXIMIZED:
-      ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+      ShowWindow(i_hwnd, SW_SHOWMAXIMIZED);
       break;
     case SW_SHOWMINIMIZED:
-      ShowWindow(hwnd, SW_RESTORE);
+      ShowWindow(i_hwnd, SW_RESTORE);
       break;
     default:
-      ShowWindow(hwnd, SW_NORMAL);
+      ShowWindow(i_hwnd, SW_NORMAL);
       break;
     }
-  SetForegroundWindow(hwnd);
+  SetForegroundWindow(i_hwnd);
   }
 
-int __stdcall wWinMain(HINSTANCE /*hInstance*/,
-             HINSTANCE /*hPrevInstance*/,
-             LPWSTR    lpCmdLine,
-             int       /*nCmdShow*/)
-  {
-  buffer.resize(20);
-  buffer2.resize(20);
-  int argc;
-  LPWSTR * args;
-  args = CommandLineToArgvW(lpCmdLine, &argc);
+DWORD GetParentProcessID(DWORD dwProcessID)
+{
+	DWORD dwParentProcessID = -1 ;
+	HANDLE			hProcessSnapshot ;
+	PROCESSENTRY32	processEntry32 ;
+	
+	hProcessSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) ;
+	if(hProcessSnapshot != INVALID_HANDLE_VALUE)
+	{
+		processEntry32.dwSize = sizeof(PROCESSENTRY32) ;
+		if(Process32First(hProcessSnapshot, &processEntry32))
+		{
+			do
+			{
+				if (dwProcessID == processEntry32.th32ProcessID)
+				{
+					dwParentProcessID = processEntry32.th32ParentProcessID ;
+					break ;
+				}
+			}
+			while(Process32Next(hProcessSnapshot, &processEntry32)) ;
+			
+			CloseHandle(hProcessSnapshot) ;
+		}
+	}
 
-  if (argc < 2)
+	return dwParentProcessID ;
+}
+
+int __stdcall wWinMain(
+  HINSTANCE /*hInstance*/,
+  HINSTANCE /*hPrevInstance*/,
+  const LPWSTR lpCmdLine,
+  int /*nCmdShow*/)
+  {
+  buffer.reserve(20);
+  buffer2.reserve(20);
+  int i_argc;
+  LPWSTR * i_args;
+  i_args = CommandLineToArgvW(lpCmdLine, &i_argc);
+
+  if (i_argc == 0)
+    {
+    AttachConsole(GetParentProcessID(GetCurrentProcessId()));
+    if (freopen("CONOUT$", "w", stdout) == nullptr)
+      {
+      AllocConsole();
+      freopen("CONOUT$", "w", stdout);
+      }
+    std::cout << "  First argument - path to application\n";
+    std::cout << "  Second argument - file to be drag&dropped into application\n";
+    std::cout << "  Third argument (optional)\n";
+    std::cout << "  VS - special mode for drag&drop into Visual Studio";
+    FreeConsole();
     return 0;
+    }
 
 #ifdef _WIN64
-  UINT message_id = RegisterWindowMessage(L"MyDragDropMessage64");
+  const UINT message_id = RegisterWindowMessage(L"MyDragDropMessage64");
 #else
-  UINT message_id = RegisterWindowMessage(L"MyDragDropMessage32");
+  const UINT message_id = RegisterWindowMessage(L"MyDragDropMessage32");
 #endif
 
-  application_path = ToLower(args[0]);
-  file_name = ToLower(args[1]);
-  std::wstring mode = (argc == 3 ? ToLower(args[2]) : L"");
-  std::wstring file_name_normal = args[1];
-  LocalFree(args);
+
+  application_path = i_args[0];
+  application_path.to_lower();
+  file_name = i_args[1];
+  file_name.to_lower();
+  const std::wstring file_name_normal = i_args[1];
+
+  RawString mode;
+  if (i_argc == 3)
+    {
+    mode = i_args[2];
+    mode.to_lower();
+    }
+
+  LocalFree(i_args);
+  EnumWindows(&EnumWindowsProc, 0);
 
   if (mode == L"vs")
     { // for Visual Studio
-    EnumWindows(&EnumWindowsProc_VisualStudio, 0);
     if (true)
       {
-      std::wofstream file(std::wstring(application_path) + L".buffer");
+      std::wofstream file(std::wstring(application_path.data()) + L".buffer");
       file << file_name_normal;
       }
-    HWND hwnd = best_window.second;
+    const HWND hwnd = best_window.second;
     Show(hwnd);
     Sleep(5);
     SendMessage(hwnd, message_id, 0, 0);
     return 0;
     }
 
-  EnumWindows(&EnumWindowsProc, 0);
   if (best_window.second != nullptr)
     {
     if (true)
       {
-      std::wofstream file(std::wstring(application_path) + L".buffer");      
+      std::wofstream file(std::wstring(application_path.data()) + L".buffer");      
       file << file_name_normal;
       }
 
 #ifdef _WIN64
-    HMODULE dll = LoadLibrary(L"DragDropLib64.dll");
-    HOOKPROC addr = (HOOKPROC)GetProcAddress(dll, "DragDrop");
+    const HMODULE dll = LoadLibrary(L"DragDropLib64.dll");
+    const HOOKPROC address = (HOOKPROC)GetProcAddress(dll, "DragDrop");
 #else
-    HMODULE dll = LoadLibrary(L"DragDropLib32.dll");
-    HOOKPROC addr = (HOOKPROC)GetProcAddress(dll, "_DragDrop@12");
+    const HMODULE dll = LoadLibrary(L"DragDropLib32.dll");
+    const HOOKPROC address = (HOOKPROC)GetProcAddress(dll, "_DragDrop@12");
 #endif
 
-    auto hook = SetWindowsHookEx(WH_CALLWNDPROC, addr, dll, 0);
-    HWND hwnd = best_window.second;
+    const auto hook = SetWindowsHookEx(WH_CALLWNDPROC, address, dll, 0);
+    const HWND hwnd = best_window.second;
     Show(hwnd);
     Sleep(5);
     SendMessage(hwnd, message_id, 0, 0);
@@ -204,15 +299,14 @@ int __stdcall wWinMain(HINSTANCE /*hInstance*/,
     STARTUPINFO si;
     PROCESS_INFORMATION pi;
 
-    std::wstring args = 
-      std::wstring() + L"\"" + application_path + L"\" \"" + file_name_normal + L"\"";
+    const std::wstring new_args = std::wstring() + L"\"" + std::wstring(application_path.data()) + L"\" \"" + file_name_normal + L"\"";
 
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
     CreateProcess(
-      const_cast<wchar_t*>(application_path.c_str()),
-      const_cast<wchar_t*>(args.c_str()), nullptr, nullptr, FALSE,
+      const_cast<wchar_t*>(application_path.data()),
+      const_cast<wchar_t*>(new_args.c_str()), nullptr, nullptr, FALSE,
       0,
       nullptr, nullptr,
       &si,

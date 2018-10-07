@@ -1,3 +1,6 @@
 /Binaries
 /Intermediate
 /.vs
+*.user
+/DragDrop.sln.debugaddin.cmdargs
+*.filters
