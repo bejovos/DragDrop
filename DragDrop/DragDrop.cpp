@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 #include <memory>
+#include <shlobj.h>
 
 #undef max
 
@@ -86,6 +87,8 @@ std::wstring RemoveSubstring(std::wstring i_string, const std::wstring & i_subst
 
 //////////////////////////////////////////////////////////////////////////
 
+IVirtualDesktopManager* g_virtual_desktop_manager;
+
 bool IsMainWindow(const HWND i_handle)
   {
   return GetWindow(i_handle, GW_OWNER) == nullptr && IsWindowVisible(i_handle);
@@ -147,9 +150,14 @@ double GetWindowScore(const HWND i_hwnd)
   }
 
 BOOL CALLBACK EnumWindowsProc(HWND i_hwnd, LPARAM /*lParam*/)
-  {  
+  {
+  BOOL is_on_current;
+  if (g_virtual_desktop_manager && SUCCEEDED(g_virtual_desktop_manager->IsWindowOnCurrentVirtualDesktop(i_hwnd, &is_on_current)) && is_on_current == false)
+    return true;
+
   if (CompareApplicationPath(i_hwnd) == true)
     best_window = std::max(best_window, std::make_pair(GetWindowScore(i_hwnd), i_hwnd));
+
   return true;
   }
 
@@ -254,6 +262,13 @@ int __stdcall wWinMain(
     }
 
   LocalFree(i_args);
+
+  // g_virtual_desktop_manager
+  if (SUCCEEDED(CoInitialize(nullptr)))
+    {
+    CoCreateInstance(CLSID_VirtualDesktopManager, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&g_virtual_desktop_manager));
+    }
+
   EnumWindows(&EnumWindowsProc, 0);
 
   if (mode == L"vs")
@@ -267,10 +282,8 @@ int __stdcall wWinMain(
     Show(hwnd);
     Sleep(5);
     SendMessage(hwnd, message_id, 0, 0);
-    return 0;
     }
-
-  if (best_window.second != nullptr)
+  else if (best_window.second != nullptr)
     {
     if (true)
       {
@@ -312,6 +325,9 @@ int __stdcall wWinMain(
       &si,
       &pi);    
     }
+
+  if (g_virtual_desktop_manager)
+    g_virtual_desktop_manager->Release();
 
   return 0;
   }
