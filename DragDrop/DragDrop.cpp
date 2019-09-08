@@ -171,14 +171,10 @@ void Show(const HWND i_hwnd)
   GetWindowPlacement(i_hwnd, &place);
   switch (place.showCmd)
     {
-    case SW_SHOWMAXIMIZED:
-      ShowWindow(i_hwnd, SW_SHOWMAXIMIZED);
-      break;
     case SW_SHOWMINIMIZED:
       ShowWindow(i_hwnd, SW_RESTORE);
       break;
     default:
-      ShowWindow(i_hwnd, SW_NORMAL);
       break;
     }
   SetForegroundWindow(i_hwnd);
