@@ -155,6 +155,12 @@ BOOL CALLBACK EnumWindowsProc(HWND i_hwnd, LPARAM /*lParam*/)
   if (g_virtual_desktop_manager && SUCCEEDED(g_virtual_desktop_manager->IsWindowOnCurrentVirtualDesktop(i_hwnd, &is_on_current)) && is_on_current == false)
     return true;
 
+  if (IsWindowVisible(i_hwnd) == false)
+    return true;
+
+  if (GetWindowTextLengthW(i_hwnd) == 0)
+    return true;
+
   if (CompareApplicationPath(i_hwnd) == true)
     best_window = std::max(best_window, std::make_pair(GetWindowScore(i_hwnd), i_hwnd));
 
