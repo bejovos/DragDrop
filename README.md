@@ -12,6 +12,11 @@
 > DragDrop32.exe "path_to_application" "%1"
 ```
 
+### Drag & Drop into everything with cmd args
+```
+> DragDrop32.exe "path_to_application" "%1" "arguments"
+```
+
 ### Drap & Drop into Visual Studio
 ```
 > DragDrop32.exe "path_to_devenv_exe" "%1" VS
